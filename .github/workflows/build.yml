@@ -42,7 +42,7 @@ jobs:
 
     - uses: actions/upload-artifact@v7
       with:
-        name: timecube-${{ matrix.arch }}
+        name: dedot-${{ matrix.arch }}
         path: dist
 
   build-windows-wheel:
