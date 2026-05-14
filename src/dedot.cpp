@@ -3,11 +3,11 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <VapourSynth.h>
-#include <VSHelper.h>
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
 
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 #define FORCE_INLINE __forceinline
 #else
 #define FORCE_INLINE inline __attribute__((always_inline))
@@ -150,7 +150,7 @@ static void process_chroma_plane_sse2(
         uint8_t *pD,
         const int width_U,
         const int height_U,
-        const int stride_U,
+        const ptrdiff_t stride_U,
         const int chroma_t1,
         const int chroma_t2) {
 
@@ -224,7 +224,7 @@ static void process_luma_plane_sse2(
         uint8_t *pD,
         const int width,
         const int height,
-        const int stride,
+        const ptrdiff_t stride,
         const int bytesPerSample,
         const int luma_2d,
         const int luma_t) {
@@ -382,7 +382,7 @@ static void process_chroma_plane_scalar(
         uint8_t *pD,
         const int width_U,
         const int height_U,
-        const int stride_U,
+        const ptrdiff_t stride_U,
         const int chroma_t1,
         const int chroma_t2) {
 
@@ -416,7 +416,7 @@ static void process_luma_plane_scalar(
         uint8_t *pD,
         const int width,
         const int height,
-        const int stride,
+        const ptrdiff_t stride,
         const int bytesPerSample,
         const int luma_2d,
         const int luma_t) {
@@ -473,7 +473,7 @@ static void process_luma_plane_scalar(
 
 
 typedef struct DedotData {
-    VSNodeRef *clip;
+    VSNode *clip;
     const VSVideoInfo *vi;
 
     int process[3];
@@ -485,34 +485,22 @@ typedef struct DedotData {
 
 } DedotData;
 
-
-static void VS_CC dedotInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
-    (void)in;
-    (void)out;
-    (void)core;
-
-    DedotData *d = (DedotData *) *instanceData;
-
-    vsapi->setVideoInfo(d->vi, 1, node);
-}
-
-
-static const VSFrameRef *VS_CC dedotGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+static const VSFrame *VS_CC dedotGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
     (void)frameData;
 
-    const DedotData *d = (const DedotData *) *instanceData;
+    const DedotData *d = (const DedotData *) instanceData;
 
     if (activationReason == arInitial) {
         for (int i = std::max(0, n - 2); i <= std::min(n + 2, d->vi->numFrames - 1); i++)
             vsapi->requestFrameFilter(i, d->clip, frameCtx);
     } else if (activationReason == arAllFramesReady) {
-        const VSFrameRef *srcPP = vsapi->getFrameFilter(std::max(0, n - 2), d->clip, frameCtx);
-        const VSFrameRef *srcP = vsapi->getFrameFilter(std::max(0, n - 1), d->clip, frameCtx);
-        const VSFrameRef *srcC = vsapi->getFrameFilter(n, d->clip, frameCtx);
-        const VSFrameRef *srcN = vsapi->getFrameFilter(std::min(n + 1, d->vi->numFrames - 1), d->clip, frameCtx);
-        const VSFrameRef *srcNN = vsapi->getFrameFilter(std::min(n + 2, d->vi->numFrames - 1), d->clip, frameCtx);
+        const VSFrame *srcPP = vsapi->getFrameFilter(std::max(0, n - 2), d->clip, frameCtx);
+        const VSFrame *srcP = vsapi->getFrameFilter(std::max(0, n - 1), d->clip, frameCtx);
+        const VSFrame *srcC = vsapi->getFrameFilter(n, d->clip, frameCtx);
+        const VSFrame *srcN = vsapi->getFrameFilter(std::min(n + 1, d->vi->numFrames - 1), d->clip, frameCtx);
+        const VSFrame *srcNN = vsapi->getFrameFilter(std::min(n + 2, d->vi->numFrames - 1), d->clip, frameCtx);
 
-        const VSFrameRef *plane_src[3] = {
+        const VSFrame *plane_src[3] = {
             d->process[0] ? nullptr : srcC,
             d->process[1] ? nullptr : srcC,
             d->process[2] ? nullptr : srcC
@@ -520,9 +508,9 @@ static const VSFrameRef *VS_CC dedotGetFrame(int n, int activationReason, void *
 
         int planes[3] = { 0, 1, 2 };
 
-        VSFrameRef *dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, plane_src, planes, srcC, core);
+        VSFrame *dst = vsapi->newVideoFrame2(&d->vi->format, d->vi->width, d->vi->height, plane_src, planes, srcC, core);
 
-        if (d->vi->format->colorFamily != cmGray && d->process[1] && d->process[2]) {
+        if (d->vi->format.colorFamily != cfGray && d->process[1] && d->process[2]) {
             for (int plane = 1; plane < 3; plane++) {
                 const uint8_t *pPP = vsapi->getReadPtr(srcPP, plane);
                 const uint8_t *pP = vsapi->getReadPtr(srcP, plane);
@@ -533,7 +521,7 @@ static const VSFrameRef *VS_CC dedotGetFrame(int n, int activationReason, void *
 
                 int width = vsapi->getFrameWidth(srcC, plane);
                 int height = vsapi->getFrameHeight(srcC, plane);
-                int stride = vsapi->getStride(srcC, plane);
+                ptrdiff_t stride = vsapi->getStride(srcC, plane);
 
 #if defined (DEDOT_X86)
                 process_chroma_plane_sse2(
@@ -549,7 +537,7 @@ static const VSFrameRef *VS_CC dedotGetFrame(int n, int activationReason, void *
         if (d->process[0]) {
             int width = vsapi->getFrameWidth(srcC, 0);
             int height = vsapi->getFrameHeight(srcC, 0);
-            int stride = vsapi->getStride(srcC, 0);
+            ptrdiff_t stride = vsapi->getStride(srcC, 0);
 
             const uint8_t *pPP = vsapi->getReadPtr(srcPP, 0) + 2 * stride;
             const uint8_t *pP = vsapi->getReadPtr(srcP, 0) + 2 * stride;
@@ -565,7 +553,7 @@ static const VSFrameRef *VS_CC dedotGetFrame(int n, int activationReason, void *
 #endif
                         pPP, pP, pC, pN, pNN, pD,
                         width, height, stride,
-                        d->vi->format->bytesPerSample,
+                        d->vi->format.bytesPerSample,
                         d->luma_2d, d->luma_t);
         }
 
@@ -600,82 +588,84 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
 
     int err;
 
-    d.luma_2d = int64ToIntS(vsapi->propGetInt(in, "luma_2d", 0, &err));
+    d.luma_2d = vsapi->mapGetIntSaturated(in, "luma_2d", 0, &err);
     if (err)
         d.luma_2d = 20;
 
-    d.luma_t = int64ToIntS(vsapi->propGetInt(in, "luma_t", 0, &err));
+    d.luma_t = vsapi->mapGetIntSaturated(in, "luma_t", 0, &err);
     if (err)
         d.luma_t = 20;
 
-    d.chroma_t1 = int64ToIntS(vsapi->propGetInt(in, "chroma_t1", 0, &err));
+    d.chroma_t1 = vsapi->mapGetIntSaturated(in, "chroma_t1", 0, &err);
     if (err)
         d.chroma_t1 = 15;
 
-    d.chroma_t2 = int64ToIntS(vsapi->propGetInt(in, "chroma_t2", 0, &err));
+    d.chroma_t2 = vsapi->mapGetIntSaturated(in, "chroma_t2", 0, &err);
     if (err)
         d.chroma_t2 = 5;
 
 
     if (d.luma_2d < 0 || d.luma_2d > 510) {
-        vsapi->setError(out, "Dedot: luma_2d must be between 0 and 510 (inclusive).");
+        vsapi->mapSetError(out, "Dedot: luma_2d must be between 0 and 510 (inclusive).");
         return;
     }
 
     if (d.luma_t < 0 || d.luma_t > 255) {
-        vsapi->setError(out, "Dedot: luma_t must be between 0 and 255 (inclusive).");
+        vsapi->mapSetError(out, "Dedot: luma_t must be between 0 and 255 (inclusive).");
         return;
     }
 
     if (d.chroma_t1 < 0 || d.chroma_t1 > 255) {
-        vsapi->setError(out, "Dedot: chroma_t1 must be between 0 and 255 (inclusive).");
+        vsapi->mapSetError(out, "Dedot: chroma_t1 must be between 0 and 255 (inclusive).");
         return;
     }
 
     if (d.chroma_t2 < 0 || d.chroma_t2 > 255) {
-        vsapi->setError(out, "Dedot: chroma_t2 must be between 0 and 255 (inclusive).");
+        vsapi->mapSetError(out, "Dedot: chroma_t2 must be between 0 and 255 (inclusive).");
         return;
     }
 
     if ((d.luma_2d == 510 || d.luma_t == 0) && d.chroma_t2 == 255) {
-        vsapi->setError(out, "Dedot: chroma_t2 can't be 255 when luma_2d is 510 or when luma_t is 0 because then all the planes would be returned unchanged.");
+        vsapi->mapSetError(out, "Dedot: chroma_t2 can't be 255 when luma_2d is 510 or when luma_t is 0 because then all the planes would be returned unchanged.");
         return;
     }
 
 
-    d.clip = vsapi->propGetNode(in, "clip", 0, NULL);
+    d.clip = vsapi->mapGetNode(in, "clip", 0, NULL);
     d.vi = vsapi->getVideoInfo(d.clip);
 
 
-    if (!d.vi->format ||
-        (d.vi->format->colorFamily != cmGray && d.vi->format->colorFamily != cmYUV) ||
-        d.vi->format->bitsPerSample > 8 ||
+    if ((d.vi->format.colorFamily != cfGray && d.vi->format.colorFamily != cfYUV) ||
+        d.vi->format.bitsPerSample > 8 ||
         d.vi->width == 0 ||
         d.vi->height == 0) {
-        vsapi->setError(out, "Dedot: the input clip must be 8 bit YUV or Gray with constant format and dimensions.");
+        vsapi->mapSetError(out, "Dedot: the input clip must be 8 bit YUV or Gray with constant format and dimensions.");
         vsapi->freeNode(d.clip);
         return;
     }
 
 
     d.process[0] = d.luma_2d < 510 && d.luma_t > 0;
-    d.process[1] = d.process[2] = d.chroma_t2 < 255 && d.vi->format->colorFamily != cmGray;
+    d.process[1] = d.process[2] = d.chroma_t2 < 255 && d.vi->format.colorFamily != cfGray;
 
 
     DedotData *data = (DedotData *)malloc(sizeof(d));
     *data = d;
 
-    vsapi->createFilter(in, out, "Dedot", dedotInit, dedotGetFrame, dedotFree, fmParallel, 0, data, core);
+    VSFilterDependency deps[1] = { {data->clip, rpGeneral} };
+
+    vsapi->createVideoFilter(out, "Dedot", data->vi, dedotGetFrame, dedotFree, fmParallel, deps, 1, data, core);
 }
 
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
-    configFunc("com.nodame.dedot", "dedot", "Temporal dotcrawl and rainbow remover", VAPOURSYNTH_API_VERSION, 1, plugin);
-    registerFunc("Dedot",
+VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
+    vspapi->configPlugin("com.nodame.dedot", "dedot", "Temporal dotcrawl and rainbow remover", VS_MAKE_VERSION(2, 0), VAPOURSYNTH_API_VERSION,  0, plugin);
+    vspapi->registerFunction("Dedot",
             "clip:clip;"
             "luma_2d:int:opt;"
             "luma_t:int:opt;"
             "chroma_t1:int:opt;"
-            "chroma_t2:int:opt;"
+            "chroma_t2:int:opt;",
+            "clip:clip;"
             , dedotCreate, 0, plugin);
 }

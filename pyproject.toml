@@ -1,0 +1,35 @@
+[build-system]
+requires = ["meson-python", "vapoursynth"]
+build-backend = "mesonpy"
+
+[project]
+name = "vapoursynth-dedot"
+description = "Dedot is a temporal cross color (rainbow) and cross luminance (dotcrawl) reduction filter for VapourSynth"
+readme = "readme.rst"
+requires-python = ">=3.12"
+license = "GPL-2.0-only"
+license-files = ["gpl2.txt"]
+authors = [
+    {name = "Fredrik Mellbin", email = "fredrik.mellbin@gmail.com"},
+]
+keywords = ["source", "video", "dotcrawl", "rainbows"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Plugins",
+    "Natural Language :: English",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Programming Language :: C++",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = ["VapourSynth"]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/dubhatervapoursynth/vapoursynth-dedot.git"
+Issues = "https://github.com/dubhatervapoursynth/vapoursynth-dedot/issues"
+
+[tool.meson-python.wheel]
+exclude = ["*/*.dll.a", "*/*.lib"]
