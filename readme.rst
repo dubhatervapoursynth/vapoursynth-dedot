@@ -21,7 +21,11 @@ Usage
 Parameters:
     *clip*
         A clip to process. It must have constant format and dimensions
-        and it must be 8 bit Gray or YUV.
+        and it must be 8..16 bit integer Gray or YUV.
+
+    All four thresholds are specified in the 8 bit range regardless of the
+    clip's bit depth. They are scaled internally to match the bit depth so a
+    given setting has the same effect.
 
     *luma_2d*
         Spatial threshold for the luma. Must be between 0 and 510.

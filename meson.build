@@ -21,19 +21,6 @@ incdir = include_directories(
 cflags = [
 ]
 
-host_cpu_family = host_machine.cpu_family()
-
-if host_cpu_family.startswith('x86')
-  cflags += ['-mfpmath=sse', '-msse2', '-DDEDOT_X86=1']
-
-  if host_cpu_family == 'x86'
-    cflags += '-DDEDOT_32_BITS=1'
-  else
-    cflags += '-DDEDOT_64_BITS=1'
-  endif
-endif
-
-
 cxx = meson.get_compiler('cpp')
 
 

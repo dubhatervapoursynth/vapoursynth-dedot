@@ -89,269 +89,34 @@ static FORCE_INLINE int process_luma_pixel_scalar(
 }
 
 
-#if defined (DEDOT_X86)
-
-#include <emmintrin.h>
-
-
-#define zeroes _mm_setzero_si128()
-
-
-static FORCE_INLINE __m128i mm_abs_diff_epu8(const __m128i &a, const __m128i &b) {
-    return _mm_max_epu8(_mm_subs_epu8(a, b),
-                        _mm_subs_epu8(b, a));
-}
-
-
-static FORCE_INLINE __m128i mm_abs_diff_epu16(const __m128i &a, const __m128i &b) {
-    return _mm_or_si128(_mm_subs_epu16(a, b),
-                        _mm_subs_epu16(b, a));
-}
-
-
-static FORCE_INLINE __m128i abs_diff_lteq_threshold_mask(
-        const __m128i &a,
-        const __m128i &b,
-        const __m128i &threshold) {
-
-    __m128i abs_diff = mm_abs_diff_epu8(a, b);
-    abs_diff = _mm_subs_epu8(abs_diff, threshold);
-
-    // Pixels less than or equal to threshold.
-    __m128i lteq_mask = _mm_cmpeq_epi8(abs_diff, zeroes);
-
-    return lteq_mask;
-}
-
-
-/// Currently 1 sub, 2 cmpeqb
-/// Could be 1 sub, 1 cmpgtb if the threshold was moved into signed byte range in advance
-static FORCE_INLINE __m128i abs_diff_gt_threshold_mask(
-        const __m128i &mmmabs,
-        const __m128i &threshold) {
-
-    __m128i abs_diff = _mm_subs_epu8(mmmabs, threshold);
-
-    // Pixels less than or equal to threshold.
-    __m128i lteq_mask = _mm_cmpeq_epi8(abs_diff, zeroes);
-    // Pixels greater than threshold.
-    __m128i gt_mask = _mm_cmpeq_epi8(lteq_mask, zeroes);
-
-    return gt_mask;
-}
-
-
-static void process_chroma_plane_sse2(
-        const uint8_t *pPP,
-        const uint8_t *pP,
-        const uint8_t *pC,
-        const uint8_t *pN,
-        const uint8_t *pNN,
-        uint8_t *pD,
+template <typename PixelType>
+static void process_chroma_plane(
+        const uint8_t *pPP8,
+        const uint8_t *pP8,
+        const uint8_t *pC8,
+        const uint8_t *pN8,
+        const uint8_t *pNN8,
+        uint8_t *pD8,
         const int width_U,
         const int height_U,
-        const ptrdiff_t stride_U,
+        const ptrdiff_t stride_bytes,
         const int chroma_t1,
         const int chroma_t2) {
 
-    const int pixels_in_xmm = 16;
+    const PixelType *pPP = reinterpret_cast<const PixelType *>(pPP8);
+    const PixelType *pP  = reinterpret_cast<const PixelType *>(pP8);
+    const PixelType *pC  = reinterpret_cast<const PixelType *>(pC8);
+    const PixelType *pN  = reinterpret_cast<const PixelType *>(pN8);
+    const PixelType *pNN = reinterpret_cast<const PixelType *>(pNN8);
+    PixelType *pD = reinterpret_cast<PixelType *>(pD8);
 
-    int width_U_simd = width_U / pixels_in_xmm * pixels_in_xmm;
-
-    __m128i bytes_chroma_t1 = _mm_set1_epi8(chroma_t1);
-    __m128i bytes_chroma_t2 = _mm_set1_epi8(chroma_t2);
+    const ptrdiff_t stride = stride_bytes / static_cast<ptrdiff_t>(sizeof(PixelType));
 
     for (int y = 0; y < height_U; y++) {
-        for (int x = 0; x < width_U_simd; x += pixels_in_xmm) {
-            __m128i pixel_PP = _mm_load_si128((const __m128i *)&pPP[x]);
-            __m128i pixel_P = _mm_load_si128((const __m128i *)&pP[x]);
-            __m128i pixel_C = _mm_load_si128((const __m128i *)&pC[x]);
-            __m128i pixel_N = _mm_load_si128((const __m128i *)&pN[x]);
-            __m128i pixel_NN = _mm_load_si128((const __m128i *)&pNN[x]);
-
-            __m128i lteq_T1_mask = _mm_and_si128(_mm_and_si128(abs_diff_lteq_threshold_mask(pixel_P, pixel_N, bytes_chroma_t1),
-                                                               abs_diff_lteq_threshold_mask(pixel_C, pixel_PP, bytes_chroma_t1)),
-                                                 abs_diff_lteq_threshold_mask(pixel_C, pixel_NN, bytes_chroma_t1));
-
-            __m128i abs_diff_CP = mm_abs_diff_epu8(pixel_C, pixel_P);
-            __m128i abs_diff_CN = mm_abs_diff_epu8(pixel_C, pixel_N);
-
-            __m128i lteq_T1_gt_T2_mask = _mm_and_si128(_mm_and_si128(lteq_T1_mask,
-                                                                     abs_diff_gt_threshold_mask(abs_diff_CP, bytes_chroma_t2)),
-                                                       abs_diff_gt_threshold_mask(abs_diff_CN, bytes_chroma_t2));
-
-            __m128i avg_nc_or_pc_mask = _mm_cmpeq_epi8(_mm_subs_epu8(abs_diff_CN, abs_diff_CP),
-                                                       zeroes);
-
-            __m128i avg_pc = _mm_avg_epu8(pixel_P, pixel_C);
-            __m128i avg_nc = _mm_avg_epu8(pixel_N, pixel_C);
-
-            __m128i avg_nc_or_pc = _mm_or_si128(_mm_and_si128(avg_nc, avg_nc_or_pc_mask),
-                                                _mm_andnot_si128(avg_nc_or_pc_mask, avg_pc));
-
-            __m128i result = _mm_or_si128(_mm_and_si128(avg_nc_or_pc, lteq_T1_gt_T2_mask),
-                                          _mm_andnot_si128(lteq_T1_gt_T2_mask, pixel_C));
-
-            _mm_store_si128((__m128i *)&pD[x], result);
+        for (int x = 0; x < width_U; x++) {
+            pD[x] = static_cast<PixelType>(process_chroma_pixel_scalar(
+                    pPP[x], pP[x], pC[x], pN[x], pNN[x], chroma_t1, chroma_t2));
         }
-
-        for (int x = width_U_simd; x < width_U; x++) {
-            int pixel_PP = pPP[x];
-            int pixel_P = pP[x];
-            int pixel_C = pC[x];
-            int pixel_N = pN[x];
-            int pixel_NN = pNN[x];
-
-            pD[x] = process_chroma_pixel_scalar(pixel_PP, pixel_P, pixel_C, pixel_N, pixel_NN, chroma_t1, chroma_t2);
-        }
-
-        pPP += stride_U;
-        pP += stride_U;
-        pC += stride_U;
-        pN += stride_U;
-        pNN += stride_U;
-        pD += stride_U;
-    }
-}
-
-
-static void process_luma_plane_sse2(
-        const uint8_t *pPP,
-        const uint8_t *pP,
-        const uint8_t *pC,
-        const uint8_t *pN,
-        const uint8_t *pNN,
-        uint8_t *pD,
-        const int width,
-        const int height,
-        const ptrdiff_t stride,
-        const int bytesPerSample,
-        const int luma_2d,
-        const int luma_t) {
-
-    const int pixels_in_xmm = 16;
-
-    int width_simd = (width - 1 * 2) / pixels_in_xmm * pixels_in_xmm;
-
-    __m128i words_luma_2d = _mm_set1_epi16(luma_2d);
-    __m128i bytes_luma_t = _mm_set1_epi8(luma_t);
-
-
-    for (int y = 0; y < 2; y++) {
-        memcpy(pD, pC, width * bytesPerSample);
-
-        pD += stride;
-        pC += stride;
-    }
-
-    for (int y = 2; y < height - 2; y++) {
-        pD[0] = pC[0];
-
-        for (int x = 1; x < 1 + width_simd; x += pixels_in_xmm) {
-            // luma2d
-            __m128i pixel_current_left  = _mm_loadu_si128((const __m128i *)&pC[x - 1]);
-            __m128i pixel_current =       _mm_loadu_si128((const __m128i *)&pC[x]);
-            __m128i pixel_current_right = _mm_loadu_si128((const __m128i *)&pC[x + 1]);
-
-            __m128i pixel_current_2above = _mm_loadu_si128((const __m128i *)&pC[x - stride * 2]);
-            __m128i pixel_current_2below = _mm_loadu_si128((const __m128i *)&pC[x + stride * 2]);
-
-
-            __m128i left_right_lo = _mm_add_epi16(_mm_unpacklo_epi8(pixel_current_left, zeroes),
-                                                  _mm_unpacklo_epi8(pixel_current_right, zeroes));
-            __m128i left_right_hi = _mm_add_epi16(_mm_unpackhi_epi8(pixel_current_left, zeroes),
-                                                  _mm_unpackhi_epi8(pixel_current_right, zeroes));
-
-            __m128i above_below_lo = _mm_add_epi16(_mm_unpacklo_epi8(pixel_current_2above, zeroes),
-                                                   _mm_unpacklo_epi8(pixel_current_2below, zeroes));
-            __m128i above_below_hi = _mm_add_epi16(_mm_unpackhi_epi8(pixel_current_2above, zeroes),
-                                                   _mm_unpackhi_epi8(pixel_current_2below, zeroes));
-
-            __m128i center_center_lo = _mm_slli_epi16(_mm_unpacklo_epi8(pixel_current, zeroes), 1);
-            __m128i center_center_hi = _mm_slli_epi16(_mm_unpackhi_epi8(pixel_current, zeroes), 1);
-
-
-            __m128i abs_diff_horizontal_lo = mm_abs_diff_epu16(left_right_lo, center_center_lo);
-            __m128i abs_diff_vertical_lo = mm_abs_diff_epu16(above_below_lo, center_center_lo);
-
-            __m128i abs_diff_horizontal_hi = mm_abs_diff_epu16(left_right_hi, center_center_hi);
-            __m128i abs_diff_vertical_hi = mm_abs_diff_epu16(above_below_hi, center_center_hi);
-
-            __m128i spatial_mask_lo = _mm_or_si128(_mm_cmpgt_epi16(abs_diff_horizontal_lo, words_luma_2d),
-                                                   _mm_cmpgt_epi16(abs_diff_vertical_lo, words_luma_2d));
-
-            __m128i spatial_mask_hi = _mm_or_si128(_mm_cmpgt_epi16(abs_diff_horizontal_hi, words_luma_2d),
-                                                   _mm_cmpgt_epi16(abs_diff_vertical_hi, words_luma_2d));
-
-            __m128i spatial_mask = _mm_packs_epi16(spatial_mask_lo, spatial_mask_hi);
-
-
-            __m128i result = pixel_current;
-
-            __m128i packed_spatial_mask = _mm_packs_epi16(spatial_mask, spatial_mask);
-#if defined (DEDOT_32_BITS)
-            int all_pixels = _mm_cvtsi128_si32(_mm_packs_epi16(packed_spatial_mask, packed_spatial_mask));
-#else
-            long long all_pixels = _mm_cvtsi128_si64(packed_spatial_mask);
-#endif
-
-            // Don't do the temporal stuff if all 16 pixels fail the spatial test.
-            if (all_pixels != 0) {
-                __m128i pixel_previous =  _mm_loadu_si128((const __m128i *)&pP[x]);
-                __m128i pixel_next =      _mm_loadu_si128((const __m128i *)&pN[x]);
-                __m128i pixel_2previous = _mm_loadu_si128((const __m128i *)&pPP[x]);
-                __m128i pixel_2next =     _mm_loadu_si128((const __m128i *)&pNN[x]);
-
-
-                // lumaT
-                __m128i temporal_mask_pn = abs_diff_lteq_threshold_mask(pixel_previous, pixel_next, bytes_luma_t);
-                __m128i st_mask = _mm_and_si128(spatial_mask, temporal_mask_pn);
-
-                __m128i temporal_mask_cpp = abs_diff_lteq_threshold_mask(pixel_current, pixel_2previous, bytes_luma_t);
-                st_mask = _mm_and_si128(st_mask, temporal_mask_cpp);
-
-                __m128i temporal_mask_cnn = abs_diff_lteq_threshold_mask(pixel_current, pixel_2next, bytes_luma_t);
-                st_mask = _mm_and_si128(st_mask, temporal_mask_cnn);
-
-                // luma avg
-                __m128i avg_pc = _mm_avg_epu8(pixel_previous, pixel_current);
-                __m128i avg_nc = _mm_avg_epu8(pixel_next, pixel_current);
-
-                __m128i abs_diff_pc = mm_abs_diff_epu8(pixel_previous, pixel_current);
-                __m128i abs_diff_nc = mm_abs_diff_epu8(pixel_next, pixel_current);
-
-                __m128i abs_diff_nc_lteq_abs_diff_pc_mask = _mm_cmpeq_epi8(_mm_subs_epu8(abs_diff_nc, abs_diff_pc),
-                                                                           zeroes);
-                __m128i avg_nc_or_avg_pc = _mm_or_si128(_mm_and_si128(abs_diff_nc_lteq_abs_diff_pc_mask, avg_nc),
-                                                        _mm_andnot_si128(abs_diff_nc_lteq_abs_diff_pc_mask, avg_pc));
-
-                result = _mm_or_si128(_mm_and_si128(avg_nc_or_avg_pc, st_mask),
-                                      _mm_andnot_si128(st_mask, pixel_current));
-            }
-
-            _mm_storeu_si128((__m128i *)&pD[x], result);
-        }
-
-        for (int x = 1 + width_simd; x < width - 1; x++) {
-            int pixel_current_left  = pC[x - 1];
-            int pixel_current =       pC[x];
-            int pixel_current_right = pC[x + 1];
-
-            int pixel_current_2above = pC[x - stride * 2];
-            int pixel_current_2below = pC[x + stride * 2];
-
-            int pixel_previous =  pP[x];
-            int pixel_next =      pN[x];
-            int pixel_2previous = pPP[x];
-            int pixel_2next =     pNN[x];
-
-            pD[x] = process_luma_pixel_scalar(pixel_current_left, pixel_current, pixel_current_right,
-                                              pixel_current_2above, pixel_current_2below,
-                                              pixel_2previous, pixel_previous, pixel_next, pixel_2next,
-                                              luma_2d, luma_t);
-        }
-
-        pD[width - 1] = pC[width - 1];
 
         pPP += stride;
         pP += stride;
@@ -360,69 +125,34 @@ static void process_luma_plane_sse2(
         pNN += stride;
         pD += stride;
     }
-
-    for (int y = height - 2; y < height; y++) {
-        memcpy(pD, pC, width * bytesPerSample);
-
-        pD += stride;
-        pC += stride;
-    }
 }
 
 
-#else // DEDOT_X86
-
-
-static void process_chroma_plane_scalar(
-        const uint8_t *pPP,
-        const uint8_t *pP,
-        const uint8_t *pC,
-        const uint8_t *pN,
-        const uint8_t *pNN,
-        uint8_t *pD,
-        const int width_U,
-        const int height_U,
-        const ptrdiff_t stride_U,
-        const int chroma_t1,
-        const int chroma_t2) {
-
-    for (int y = 0; y < height_U; y++) {
-        for (int x = 0; x < width_U; x++) {
-            int pixel_PP = pPP[x];
-            int pixel_P = pP[x];
-            int pixel_C = pC[x];
-            int pixel_N = pN[x];
-            int pixel_NN = pNN[x];
-
-            pD[x] = process_chroma_pixel_scalar(pixel_PP, pixel_P, pixel_C, pixel_N, pixel_NN, chroma_t1, chroma_t2);
-        }
-
-        pPP += stride_U;
-        pP += stride_U;
-        pC += stride_U;
-        pN += stride_U;
-        pNN += stride_U;
-        pD += stride_U;
-    }
-}
-
-
-static void process_luma_plane_scalar(
-        const uint8_t *pPP,
-        const uint8_t *pP,
-        const uint8_t *pC,
-        const uint8_t *pN,
-        const uint8_t *pNN,
-        uint8_t *pD,
+template <typename PixelType>
+static void process_luma_plane(
+        const uint8_t *pPP8,
+        const uint8_t *pP8,
+        const uint8_t *pC8,
+        const uint8_t *pN8,
+        const uint8_t *pNN8,
+        uint8_t *pD8,
         const int width,
         const int height,
-        const ptrdiff_t stride,
-        const int bytesPerSample,
+        const ptrdiff_t stride_bytes,
         const int luma_2d,
         const int luma_t) {
 
+    const PixelType *pPP = reinterpret_cast<const PixelType *>(pPP8);
+    const PixelType *pP  = reinterpret_cast<const PixelType *>(pP8);
+    const PixelType *pC  = reinterpret_cast<const PixelType *>(pC8);
+    const PixelType *pN  = reinterpret_cast<const PixelType *>(pN8);
+    const PixelType *pNN = reinterpret_cast<const PixelType *>(pNN8);
+    PixelType *pD = reinterpret_cast<PixelType *>(pD8);
+
+    const ptrdiff_t stride = stride_bytes / static_cast<ptrdiff_t>(sizeof(PixelType));
+
     for (int y = 0; y < 2; y++) {
-        memcpy(pD, pC, width * bytesPerSample);
+        memcpy(pD, pC, width * sizeof(PixelType));
 
         pD += stride;
         pC += stride;
@@ -444,10 +174,11 @@ static void process_luma_plane_scalar(
             int pixel_2previous = pPP[x];
             int pixel_2next =     pNN[x];
 
-            pD[x] = process_luma_pixel_scalar(pixel_current_left, pixel_current, pixel_current_right,
-                                              pixel_current_2above, pixel_current_2below,
-                                              pixel_2previous, pixel_previous, pixel_next, pixel_2next,
-                                              luma_2d, luma_t);
+            pD[x] = static_cast<PixelType>(process_luma_pixel_scalar(
+                    pixel_current_left, pixel_current, pixel_current_right,
+                    pixel_current_2above, pixel_current_2below,
+                    pixel_2previous, pixel_previous, pixel_next, pixel_2next,
+                    luma_2d, luma_t));
         }
 
         pD[width - 1] = pC[width - 1];
@@ -461,15 +192,12 @@ static void process_luma_plane_scalar(
     }
 
     for (int y = height - 2; y < height; y++) {
-        memcpy(pD, pC, width * bytesPerSample);
+        memcpy(pD, pC, width * sizeof(PixelType));
 
         pD += stride;
         pC += stride;
     }
 }
-
-
-#endif // DEDOT_X86
 
 
 typedef struct DedotData {
@@ -510,6 +238,8 @@ static const VSFrame *VS_CC dedotGetFrame(int n, int activationReason, void *ins
 
         VSFrame *dst = vsapi->newVideoFrame2(&d->vi->format, d->vi->width, d->vi->height, plane_src, planes, srcC, core);
 
+        const int bytesPerSample = d->vi->format.bytesPerSample;
+
         if (d->vi->format.colorFamily != cfGray && d->process[1] && d->process[2]) {
             for (int plane = 1; plane < 3; plane++) {
                 const uint8_t *pPP = vsapi->getReadPtr(srcPP, plane);
@@ -523,14 +253,16 @@ static const VSFrame *VS_CC dedotGetFrame(int n, int activationReason, void *ins
                 int height = vsapi->getFrameHeight(srcC, plane);
                 ptrdiff_t stride = vsapi->getStride(srcC, plane);
 
-#if defined (DEDOT_X86)
-                process_chroma_plane_sse2(
-#else
-                process_chroma_plane_scalar(
-#endif
-                            pPP, pP, pC, pN, pNN, pD,
-                            width, height, stride,
-                            d->chroma_t1, d->chroma_t2);
+                if (bytesPerSample == 1)
+                    process_chroma_plane<uint8_t>(
+                                pPP, pP, pC, pN, pNN, pD,
+                                width, height, stride,
+                                d->chroma_t1, d->chroma_t2);
+                else
+                    process_chroma_plane<uint16_t>(
+                                pPP, pP, pC, pN, pNN, pD,
+                                width, height, stride,
+                                d->chroma_t1, d->chroma_t2);
             }
         }
 
@@ -546,15 +278,16 @@ static const VSFrame *VS_CC dedotGetFrame(int n, int activationReason, void *ins
             const uint8_t *pNN = vsapi->getReadPtr(srcNN, 0) + 2 * stride;
             uint8_t *pD = vsapi->getWritePtr(dst, 0);
 
-#if defined (DEDOT_X86)
-            process_luma_plane_sse2(
-#else
-            process_luma_plane_scalar(
-#endif
-                        pPP, pP, pC, pN, pNN, pD,
-                        width, height, stride,
-                        d->vi->format.bytesPerSample,
-                        d->luma_2d, d->luma_t);
+            if (bytesPerSample == 1)
+                process_luma_plane<uint8_t>(
+                            pPP, pP, pC, pN, pNN, pD,
+                            width, height, stride,
+                            d->luma_2d, d->luma_t);
+            else
+                process_luma_plane<uint16_t>(
+                            pPP, pP, pC, pN, pNN, pD,
+                            width, height, stride,
+                            d->luma_2d, d->luma_t);
         }
 
         vsapi->freeFrame(srcPP);
@@ -636,10 +369,12 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
 
 
     if ((d.vi->format.colorFamily != cfGray && d.vi->format.colorFamily != cfYUV) ||
-        d.vi->format.bitsPerSample > 8 ||
+        d.vi->format.sampleType != stInteger ||
+        d.vi->format.bitsPerSample < 8 ||
+        d.vi->format.bitsPerSample > 16 ||
         d.vi->width == 0 ||
         d.vi->height == 0) {
-        vsapi->mapSetError(out, "Dedot: the input clip must be 8 bit YUV or Gray with constant format and dimensions.");
+        vsapi->mapSetError(out, "Dedot: the input clip must be 8..16 bit integer YUV or Gray with constant format and dimensions.");
         vsapi->freeNode(d.clip);
         return;
     }
@@ -648,6 +383,11 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     d.process[0] = d.luma_2d < 510 && d.luma_t > 0;
     d.process[1] = d.process[2] = d.chroma_t2 < 255 && d.vi->format.colorFamily != cfGray;
 
+    const int shift = d.vi->format.bitsPerSample - 8;
+    d.luma_2d <<= shift;
+    d.luma_t <<= shift;
+    d.chroma_t1 <<= shift;
+    d.chroma_t2 <<= shift;
 
     DedotData *data = (DedotData *)malloc(sizeof(d));
     *data = d;
