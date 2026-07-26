@@ -151,6 +151,8 @@ static void process_luma_plane(
 
     const ptrdiff_t stride = stride_bytes / static_cast<ptrdiff_t>(sizeof(PixelType));
 
+    // the top and bottom copies below assume they cover disjoint parts of the plane, which
+    // is only true from four rows up. dedotCreate rejects anything shorter.
     for (int y = 0; y < 2; y++) {
         memcpy(pD, pC, width * sizeof(PixelType));
 
@@ -358,8 +360,8 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
         return;
     }
 
-    if ((d.luma_2d == 510 || d.luma_t == 0) && d.chroma_t2 == 255) {
-        vsapi->mapSetError(out, "Dedot: chroma_t2 can't be 255 when luma_2d is 510 or when luma_t is 0 because then all the planes would be returned unchanged.");
+    if (d.luma_2d == 510 && d.chroma_t2 == 255) {
+        vsapi->mapSetError(out, "Dedot: chroma_t2 can't be 255 when luma_2d is 510 because then all the planes would be returned unchanged.");
         return;
     }
 
@@ -380,7 +382,20 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     }
 
 
-    d.process[0] = d.luma_2d < 510 && d.luma_t > 0;
+    // the luma filter reads two rows above and below the row it writes, so anything
+    // shorter than that has no row it could process
+    if (d.vi->height < 4) {
+        vsapi->mapSetError(out, "Dedot: the input clip must be at least 4 pixels tall.");
+        vsapi->freeNode(d.clip);
+        return;
+    }
+
+
+    // Only luma_2d can switch the luma off: the spatial test is "> luma_2d" and the largest
+    // difference it can see is 510, so 510 never passes. luma_t is not equivalent, because
+    // its tests are "<= luma_t", and at 0 that still admits pixels whose temporal
+    // differences are exactly zero.
+    d.process[0] = d.luma_2d < 510;
     d.process[1] = d.process[2] = d.chroma_t2 < 255 && d.vi->format.colorFamily != cfGray;
 
     const int shift = d.vi->format.bitsPerSample - 8;
@@ -390,6 +405,13 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     d.chroma_t2 <<= shift;
 
     DedotData *data = (DedotData *)malloc(sizeof(d));
+
+    if (!data) {
+        vsapi->mapSetError(out, "Dedot: out of memory.");
+        vsapi->freeNode(d.clip);
+        return;
+    }
+
     *data = d;
 
     VSFilterDependency deps[1] = { {data->clip, rpGeneral} };

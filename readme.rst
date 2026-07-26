@@ -42,7 +42,9 @@ Parameters:
 
         Higher values will make the filter process more pixels.
 
-        If *luma_t* is 0, the luma is returned without any processing.
+        Note that 0 does not disable the luma filtering: the temporal
+        tests are "less than or equal", so a pixel whose temporal
+        differences are all exactly 0 is still filtered.
 
         Default: 20.
 
