@@ -3,7 +3,7 @@ project('Dedot', 'cpp',
     license: 'GPL-2.0-only',
     license_files: 'gpl2.txt',
     meson_version: '>=1.2.3',
-    version: '3.0',
+    version: '4.0',
 )
 sources = [
   'src/dedot.cpp',
@@ -22,9 +22,6 @@ cflags = [
 ]
 
 cxx = meson.get_compiler('cpp')
-
-
-
 
 py = import('python').find_installation(pure: false)
 

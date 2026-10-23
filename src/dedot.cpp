@@ -421,7 +421,7 @@ static void VS_CC dedotCreate(const VSMap *in, VSMap *out, void *userData, VSCor
 
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
-    vspapi->configPlugin("com.nodame.dedot", "dedot", "Temporal dotcrawl and rainbow remover", VS_MAKE_VERSION(3, 0), VAPOURSYNTH_API_VERSION,  0, plugin);
+    vspapi->configPlugin("com.nodame.dedot", "dedot", "Temporal dotcrawl and rainbow remover", VS_MAKE_VERSION(4, 0), VAPOURSYNTH_API_VERSION,  0, plugin);
     vspapi->registerFunction("Dedot",
             "clip:vnode;"
             "luma_2d:int:opt;"
